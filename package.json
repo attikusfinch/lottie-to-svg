@@ -24,7 +24,7 @@
   "homepage": "https://github.com/chadly/lottie-to-svg#README",
   "dependencies": {
     "jsdom": "^16.3.0",
-    "lottie-web": "^5.7.1"
+    "lottie-web": "^5.13.0"
   },
   "devDependencies": {
     "@runly/eslint-config": "^2.0.1",
