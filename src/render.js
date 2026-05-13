@@ -5,27 +5,39 @@ const lottie = require("lottie-web");
  */
 function sanitizeShapes(shapes) {
 	if (!Array.isArray(shapes)) return [];
-	
-	return shapes.map(shape => {
-		if (!shape) return shape;
-		
+
+	for (const shape of shapes) {
+		if (!shape) continue;
+
 		// Group shapes must have 'it' array
-		if (shape.ty === 'gr' && !shape.it) {
+		if (shape.ty === "gr" && !shape.it) {
 			shape.it = [];
 		}
 
-        // Remove dashes from strokes to prevent potential hangs
-        if (shape.ty === 'st' && shape.d) {
-            delete shape.d;
-        }
-		
+		// Remove dashes from strokes to prevent potential hangs
+		if (shape.ty === "st" && shape.d) {
+			delete shape.d;
+		}
+
 		// Recursively sanitize nested shapes
 		if (shape.it) {
 			shape.it = sanitizeShapes(shape.it);
 		}
-		
-		return shape;
-	});
+	}
+
+	return shapes;
+}
+
+function cloneAnimationData(data) {
+	if (typeof global.structuredClone === "function") {
+		try {
+			return global.structuredClone(data);
+		} catch {
+			// Fall back to the previous JSON clone behavior for non-cloneable input.
+		}
+	}
+
+	return JSON.parse(JSON.stringify(data));
 }
 
 /**
@@ -33,37 +45,37 @@ function sanitizeShapes(shapes) {
  */
 function sanitizeAnimationData(data) {
 	if (!data) return data;
-	
+
 	// Deep clone to avoid mutating original
-	const sanitized = JSON.parse(JSON.stringify(data));
-	
+	const sanitized = cloneAnimationData(data);
+
 	function sanitizeLayers(layers) {
 		if (!Array.isArray(layers)) return;
-		
+
 		for (const layer of layers) {
 			if (!layer) continue;
-			
+
 			// Shape layers (ty: 4) must have shapes array
 			if (layer.ty === 4 && !layer.shapes) {
 				layer.shapes = [];
 			}
-			
+
 			if (layer.shapes) {
 				layer.shapes = sanitizeShapes(layer.shapes);
 			}
-			
+
 			// Precomp layers (ty: 0) may have nested layers
-			// We don't need to recurse here because we iterate over all assets 
-            // in the main sanitizeAnimationData function loop below.
-            // Removing recursion avoids cycles and repeated work.
+			// We don't need to recurse here because we iterate over all assets
+			// in the main sanitizeAnimationData function loop below.
+			// Removing recursion avoids cycles and repeated work.
 		}
 	}
-	
+
 	// Sanitize main layers
 	if (sanitized.layers) {
 		sanitizeLayers(sanitized.layers);
 	}
-	
+
 	// Sanitize asset layers
 	if (sanitized.assets) {
 		for (const asset of sanitized.assets) {
@@ -72,22 +84,52 @@ function sanitizeAnimationData(data) {
 			}
 		}
 	}
-	
+
 	return sanitized;
 }
 
 module.exports = (document, animationData, opts, frameNumber) =>
 	new Promise((resolve, reject) => {
+		let instance;
+		let settled = false;
+		const container = document.createElement("div");
+
+		function cleanup() {
+			if (instance) {
+				instance.destroy();
+			}
+
+			if (container.parentNode) {
+				container.parentNode.removeChild(container);
+			}
+		}
+
+		function finish(err, svg) {
+			if (settled) return;
+
+			settled = true;
+
+			try {
+				cleanup();
+			} catch (cleanupErr) {
+				if (!err) {
+					err = cleanupErr;
+				}
+			}
+
+			if (err) {
+				reject(err);
+			} else {
+				resolve(svg);
+			}
+		}
+
 		try {
-			const container = document.createElement("div");
 			document.body.append(container);
 
-            console.log("Starting sanitization...");
 			const safeAnimationData = sanitizeAnimationData(animationData);
-            console.log("Sanitization complete.");
 
-            console.log("Loading animation...");
-			var instance = lottie.loadAnimation({
+			instance = lottie.loadAnimation({
 				container: container,
 				renderer: "svg",
 				loop: false,
@@ -95,33 +137,22 @@ module.exports = (document, animationData, opts, frameNumber) =>
 				animationData: safeAnimationData,
 				rendererSettings: opts
 			});
-            console.log("Animation loaded instance created.");
 
-			instance.addEventListener("config_ready", () => {
-				console.log("Lottie: config_ready");
-			});
-			instance.addEventListener("data_ready", () => {
-				console.log("Lottie: data_ready");
-			});
 			instance.addEventListener("data_failed", () => {
-				console.log("Lottie: data_failed");
-				reject(new Error("Lottie data failed to load"));
+				finish(new Error("Lottie data failed to load"));
 			});
-			instance.addEventListener("error", (error) => {
-				console.log("Lottie: error", error);
-				reject(error);
+			instance.addEventListener("error", error => {
+				finish(error);
 			});
 			instance.addEventListener("DOMLoaded", () => {
-				console.log("Lottie: DOMLoaded");
 				try {
 					instance.goToAndStop(frameNumber, true);
-					resolve(container.innerHTML);
+					finish(null, container.innerHTML);
 				} catch (e) {
-					console.error("Error during goToAndStop", e);
-					reject(e);
+					finish(e);
 				}
 			});
 		} catch (err) {
-			reject(err);
+			finish(err);
 		}
 	});
